@@ -1,3 +1,4 @@
+use crate::plugins::CfgPlugin;
 use config::{Config, File};
 use miette::{IntoDiagnostic, Result};
 use serde::Deserialize;
@@ -30,6 +31,8 @@ pub struct Cfg {
     pub server: CfgServer,
     pub storage: CfgStorage,
     pub filters: Option<Vec<CfgFilter>>,
+    /// WASM plugins configuration.
+    pub plugins: Option<Vec<CfgPlugin>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

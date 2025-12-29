@@ -17,16 +17,17 @@ use ulid::Ulid;
 use crate::{
     config::{Cfg, FilterAction, FilterType},
     constant_time_eq, metrics,
+    plugins::{Hook, HookInput, HookResult, PluginManager},
     storage::{Status, Storage, StoredEmail},
     worker::{self, Job, Worker},
 };
 
-/// The Callbacks struct holds the configuration, storage, and sender channel.
 pub struct Callbacks {
     cfg: Cfg,
     auth_mapping: Mutex<HashMap<String, String>>,
     storage: Arc<dyn Storage>,
     sender_channel: async_channel::Sender<worker::Job>,
+    plugin_manager: Option<Arc<PluginManager>>,
 }
 
 fn extract_domain_from_path(path: &str) -> Option<String> {
@@ -64,19 +65,42 @@ impl Expiry<String, MxLookup> for MXExpiry {
     }
 }
 
-/// The Callbacks struct implements the SmtpCallbacks trait.
 impl Callbacks {
-    /// Creates a new Callbacks instance, spins up the worker pool, and returns the
-    /// corresponding join handles so the caller can coordinate shutdown.
-    ///
-    /// Keeping the join handles at the call site (e.g. `run_server`) allows the
-    /// application to await worker completion and ensure any in-flight mail is
-    /// processed before exit.
+    async fn call_plugin_hook(
+        &self,
+        hook: Hook,
+        message_id: &str,
+        from: &str,
+        to: &[String],
+        body: Option<&str>,
+    ) -> Result<HookResult, SmtpError> {
+        let pm = match &self.plugin_manager {
+            Some(pm) if pm.has_plugins_for(hook) => pm,
+            _ => return Ok(HookResult::default()),
+        };
+
+        let input = HookInput {
+            hook,
+            message_id: message_id.to_string(),
+            from: from.to_string(),
+            to: to.to_vec(),
+            subject: None,
+            headers: HashMap::new(),
+            body: body.map(|b| b.to_string()),
+            body_size: body.map(|b| b.len()),
+            plugin_config: serde_json::Value::Null,
+            metadata: HashMap::new(),
+        };
+
+        Ok(pm.call_hook(hook, input, HashMap::new()).await)
+    }
+
     pub fn new(
         storage: Arc<dyn Storage>,
         sender_channel: async_channel::Sender<Job>,
         receiver_channel: async_channel::Receiver<Job>,
         cfg: Cfg,
+        plugin_manager: Option<Arc<PluginManager>>,
     ) -> (Self, Vec<JoinHandle<()>>) {
         let expiry = MXExpiry;
         let mx_cache: Cache<_, _> = Cache::builder()
@@ -84,7 +108,6 @@ impl Callbacks {
             .expire_after(expiry)
             .build();
 
-        // Start workers.
         let worker_count = cfg.server.workers.unwrap_or(1).max(1);
         let rate_limit_config = cfg
             .server
@@ -100,6 +123,7 @@ impl Callbacks {
             let dkim = cfg.server.dkim.clone();
             let mx_cache = mx_cache.clone();
             let rate_limit_config = rate_limit_config.clone();
+            let pm = plugin_manager.clone();
             let handle = tokio::spawn(async move {
                 let worker_config = worker::WorkerConfig {
                     disable_outbound: cfg.server.disable_outbound.unwrap_or(false),
@@ -113,6 +137,7 @@ impl Callbacks {
                     &dkim,
                     mx_cache,
                     worker_config,
+                    pm,
                 )
                 .await
                 .expect("Failed to create worker");
@@ -121,7 +146,6 @@ impl Callbacks {
             worker_handles.push(handle);
         }
 
-        // Create the auth mapping.
         let mut auth_mapping = HashMap::new();
 
         if let Some(auth) = &cfg.server.auth {
@@ -135,6 +159,7 @@ impl Callbacks {
             sender_channel,
             cfg,
             auth_mapping: Mutex::new(auth_mapping),
+            plugin_manager,
         };
 
         (callbacks, worker_handles)
@@ -150,6 +175,7 @@ impl Callbacks {
             from: email.from.clone(),
             to: email.to.clone(),
             body: email.body.clone(),
+            metadata: HashMap::new(),
         };
         // Map any error into a SmtpError.
         self.storage
@@ -267,18 +293,20 @@ impl SmtpCallbacks for Callbacks {
                     return Err(SmtpError::MailFromDenied { message });
                 }
             }
-            // If we reached here:
-            // - No DENY rule matched (or sender had no domain to match against specific DENY rules).
-            // - AND ( (there are no FromDomain ALLOW rules) OR (an ALLOW rule matched) ).
-            // So, allow.
         }
 
-        // If self.cfg.filters is None, or if it's Some but contains no FromDomain filters,
-        // or if it passed all applicable FromDomain filters.
-        Ok(())
+        match self
+            .call_plugin_hook(Hook::OnMailFrom, "", from_path, &[], None)
+            .await?
+        {
+            HookResult::Continue(_) => Ok(()),
+            HookResult::Reject(msg) => Err(SmtpError::MailFromDenied { message: msg }),
+            HookResult::Defer(_) => Err(SmtpError::MailFromDenied {
+                message: "Please try again later".to_string(),
+            }),
+        }
     }
 
-    // Handles the RCPT TO command.
     async fn on_rcpt_to(&self, rcpt_path: &str) -> Result<(), SmtpError> {
         let recipient_domain_opt: Option<String> = extract_domain_from_path(rcpt_path);
 
@@ -342,21 +370,38 @@ impl SmtpCallbacks for Callbacks {
                     return Err(SmtpError::RcptToDenied { message });
                 }
             }
-            // If we reached here:
-            // - No DENY rule matched (or recipient had no domain to match against specific DENY rules).
-            // - AND ( (there are no ToDomain ALLOW rules) OR (an ALLOW rule matched) ).
-            // So, allow.
         }
 
-        // If self.cfg.filters is None, or if it's Some but contains no ToDomain filters,
-        // or if it passed all applicable ToDomain filters.
-        Ok(())
+        match self
+            .call_plugin_hook(Hook::OnRcptTo, "", "", &[rcpt_path.to_string()], None)
+            .await?
+        {
+            HookResult::Continue(_) => Ok(()),
+            HookResult::Reject(msg) => Err(SmtpError::RcptToDenied { message: msg }),
+            HookResult::Defer(_) => Err(SmtpError::RcptToDenied {
+                message: "Please try again later".to_string(),
+            }),
+        }
     }
 
-    // Handles the DATA command.
     async fn on_data(&self, email: &Email) -> Result<(), SmtpError> {
-        self.process_email(email).await?;
-        Ok(())
+        match self
+            .call_plugin_hook(Hook::OnData, "", &email.from, &email.to, Some(&email.body))
+            .await?
+        {
+            HookResult::Continue(_) => {
+                self.process_email(email).await?;
+                Ok(())
+            }
+            HookResult::Reject(msg) => Err(SmtpError::ParseError {
+                message: msg,
+                span: (0, 0).into(),
+            }),
+            HookResult::Defer(_) => Err(SmtpError::ParseError {
+                message: "Please try again later".to_string(),
+                span: (0, 0).into(),
+            }),
+        }
     }
 }
 
@@ -449,16 +494,15 @@ mod tests {
                 cleanup: None,
             },
             filters,
+            plugins: None,
         };
 
         let (sender_channel, receiver_channel) = async_channel::unbounded::<worker::Job>();
         let storage: Arc<dyn Storage> = Arc::new(MockStorage);
 
         let (callbacks, worker_handles) =
-            Callbacks::new(storage, sender_channel, receiver_channel, cfg);
+            Callbacks::new(storage, sender_channel, receiver_channel, cfg, None);
         for handle in worker_handles {
-            // These handles outlive the test scope; aborting avoids leaking tasks into
-            // other async tests once we have exercised the setup logic.
             handle.abort();
         }
 
@@ -883,7 +927,7 @@ mod tests {
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
 
-        let (_callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (_callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
         for handle in worker_handles {
             // Abort so the spawned worker does not keep running past the test lifetime.
             handle.abort();
@@ -909,7 +953,7 @@ mod tests {
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
 
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
         let auth_mapping = callbacks.auth_mapping.lock().await;
         assert_eq!(auth_mapping.get("user1"), Some(&"pass1".to_string()));
         assert_eq!(auth_mapping.get("user2"), Some(&"pass2".to_string()));
@@ -940,7 +984,7 @@ mod tests {
         let cfg = create_test_config();
         let storage = Arc::new(MockStorageWithError {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let email = Email {
             from: "sender@example.com".to_string(),
@@ -984,7 +1028,7 @@ mod tests {
 
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let result = callbacks.on_auth("testuser", "testpass").await;
         assert!(result.is_ok());
@@ -1007,7 +1051,7 @@ mod tests {
 
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let result = callbacks.on_auth("wronguser", "testpass").await;
         assert!(result.is_ok());
@@ -1026,7 +1070,7 @@ mod tests {
 
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let mail_cmd = create_mail_from_command("sender@example.com");
         let result = callbacks.on_mail_from(&mail_cmd).await;
@@ -1049,7 +1093,7 @@ mod tests {
 
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let mail_cmd = create_mail_from_command("invalidpath");
         let result = callbacks.on_mail_from(&mail_cmd).await;
@@ -1068,7 +1112,7 @@ mod tests {
 
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let result = callbacks.on_rcpt_to("recipient@example.com").await;
         assert!(result.is_ok());
@@ -1090,7 +1134,7 @@ mod tests {
 
         let storage = Arc::new(MockStorage {});
         let (sender, receiver) = async_channel::bounded(100);
-        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg);
+        let (callbacks, worker_handles) = Callbacks::new(storage, sender, receiver, cfg, None);
 
         let result = callbacks.on_rcpt_to("invalidpath").await;
         assert!(result.is_err());
@@ -1215,6 +1259,7 @@ mod tests {
                 cleanup: None,
             },
             filters: None,
+            plugins: None,
         }
     }
 }

@@ -29,6 +29,7 @@ For detailed technical information about the server's architecture and design, s
 - **Forward-Only**: Specializes in receiving and forwarding emails, not full SMTP functionality.
 - **Security Features**: Supports DKIM, TLS, and SMTP authentication.
 - **Rate Limiting**: Per-domain rate limiting to prevent overwhelming destination servers and maintain sender reputation.
+- **WASM Plugins**: Extend email processing with WebAssembly plugins for spam filtering, webhooks, logging, and more.
 
 ## Getting Started
 
@@ -257,6 +258,57 @@ default_limit = 60
 - **Non-Blocking**: Workers handle other emails while rate-limited emails wait
 
 For detailed rate limiting configuration and examples, see the [Configuration Guide](docs/CONFIGURATION.md) and [Example Configurations](examples/).
+
+## WASM Plugins
+
+Hedwig supports extending email processing with WebAssembly plugins via [Extism](https://extism.org/). Plugins can intercept and modify email flow at various points in the lifecycle.
+
+### Available Hooks
+
+| Hook | Trigger | Use Cases |
+|------|---------|-----------|
+| `on_mail_from` | MAIL FROM command | Sender validation, reputation checks |
+| `on_rcpt_to` | RCPT TO command | Recipient validation, routing |
+| `on_data` | Email body received | Spam filtering, content inspection |
+| `after_send` | Successful delivery | Webhooks, analytics, audit logging |
+| `on_bounce` | Email bounced | Suppression lists, alerting |
+
+### Quick Start
+
+1. Build a plugin (see [examples/plugins/](examples/plugins/) for a complete example):
+
+```bash
+cd examples/plugins/logger
+cargo build --release --target wasm32-unknown-unknown
+```
+
+2. Configure in config.toml:
+
+```toml
+[[plugins]]
+name = "logger"
+path = "/etc/hedwig/plugins/logger.wasm"
+enabled = true
+priority = 100
+hooks = ["on_data", "after_send", "on_bounce"]
+
+[plugins.config]
+log_headers = false
+```
+
+### Plugin Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `name` | string | required | Unique plugin identifier |
+| `path` | string | required | Path to .wasm file |
+| `enabled` | bool | `true` | Enable/disable plugin |
+| `on_error` | string | `"continue"` | `"continue"` or `"reject"` on errors |
+| `priority` | int | `50` | Execution order (lower runs first) |
+| `hooks` | array | required | Hooks to subscribe to |
+| `config` | table | `{}` | Plugin-specific configuration |
+
+For complete plugin development documentation, see [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ## Metrics
 

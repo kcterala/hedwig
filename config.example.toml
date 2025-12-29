@@ -76,3 +76,32 @@ action = "allow"
 type = "to_domain_filter"
 domain = ["blocked-domain.com"]
 action = "deny"
+
+# Optional WASM plugins for extending email processing
+# See docs/PLUGINS.md for the full plugin development guide
+
+# Example: Logger plugin - logs all email events
+[[plugins]]
+name = "logger"
+path = "/etc/hedwig/plugins/logger.wasm"
+enabled = true
+on_error = "continue"  # "continue" (default) or "reject" on plugin errors
+priority = 100         # Lower runs first, default 50
+hooks = ["on_mail_from", "on_rcpt_to", "on_data", "after_send", "on_bounce"]
+
+[plugins.config]
+log_headers = false
+log_body = false
+
+# Example: Spam filter plugin - runs before logger
+# [[plugins]]
+# name = "spam-filter"
+# path = "/etc/hedwig/plugins/spam.wasm"
+# enabled = true
+# on_error = "continue"
+# priority = 10
+# hooks = ["on_data"]
+#
+# [plugins.config]
+# threshold = 5.0
+# blocked_domains = ["spam.com", "malware.net"]

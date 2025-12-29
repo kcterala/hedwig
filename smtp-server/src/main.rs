@@ -2,6 +2,7 @@ use clap::Parser;
 use config::CfgStorage;
 use futures::StreamExt;
 use miette::{bail, Context, IntoDiagnostic, Result};
+use plugins::PluginManager;
 use rustls::pki_types::CertificateDer;
 use smtp::{SmtpServer, SmtpStream};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ mod config;
 mod dkim;
 mod health;
 mod metrics;
+mod plugins;
 mod storage;
 mod worker;
 
@@ -91,6 +93,33 @@ async fn run_server(config_path: &str) -> Result<()> {
         info!("DKIM is enabled");
     } else {
         info!("DKIM is disabled");
+    }
+
+    let plugin_manager: Option<Arc<PluginManager>> = if let Some(plugin_configs) = &cfg.plugins {
+        if !plugin_configs.is_empty() {
+            match PluginManager::new(plugin_configs) {
+                Ok(pm) => {
+                    if pm.plugin_count() > 0 {
+                        Some(Arc::new(pm))
+                    } else {
+                        info!("no plugins loaded (all disabled or failed to load)");
+                        None
+                    }
+                }
+                Err(e) => {
+                    error!("failed to initialize plugin manager: {:#}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if plugin_manager.is_some() {
+        info!("plugin system initialized");
     }
 
     if let Some(metrics_cfg) = &cfg.server.metrics {
@@ -221,6 +250,7 @@ async fn run_server(config_path: &str) -> Result<()> {
         sender_channel.clone(),
         receiver_channel.clone(),
         cfg.clone(),
+        plugin_manager,
     );
 
     let smtp_server = SmtpServer::new(callbacks, auth_enabled);

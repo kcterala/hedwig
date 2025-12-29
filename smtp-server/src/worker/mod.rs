@@ -29,6 +29,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::CfgDKIM,
     metrics,
+    plugins::{Hook, HookInput, HookResult, PluginManager},
     storage::{Status, Storage},
 };
 
@@ -70,29 +71,49 @@ pub struct Worker {
     pool: PoolManager,
     dkim_signer: Option<DkimSignerType>,
 
-    // MX Cache
     mx_cache: Cache<String, MxLookup>,
 
-    /// disable_outbound when set true, all outbound emails will be discarded.
     disable_outbound: bool,
 
-    /// initial_delay is the initial delay before retrying a deferred email.
     initial_delay: Duration,
 
-    /// max_delay is the maximum delay before retrying a deferred email.
     max_delay: Duration,
 
-    /// rate_limiter controls the rate of email sending per domain.
     rate_limiter: RateLimiter,
+
+    plugin_manager: Option<Arc<PluginManager>>,
 }
 
 impl Worker {
+    async fn call_plugin_hook(&self, hook: Hook, email: &crate::storage::StoredEmail) {
+        let pm = match &self.plugin_manager {
+            Some(pm) if pm.has_plugins_for(hook) => pm,
+            _ => return,
+        };
+
+        let input = HookInput {
+            hook,
+            message_id: email.message_id.clone(),
+            from: email.from.clone(),
+            to: email.to.clone(),
+            subject: None,
+            headers: std::collections::HashMap::new(),
+            body: Some(email.body.clone()),
+            body_size: Some(email.body.len()),
+            plugin_config: serde_json::Value::Null,
+            metadata: email.metadata.clone(),
+        };
+
+        let _ = pm.call_hook(hook, input, email.metadata.clone()).await;
+    }
+
     pub async fn new(
         channel: Receiver<Job>,
         storage: Arc<dyn Storage>,
         dkim: &Option<CfgDKIM>,
         mx_cache: Cache<String, MxLookup>,
         config: WorkerConfig,
+        plugin_manager: Option<Arc<PluginManager>>,
     ) -> Result<Self> {
         info!("Initializing SMTP worker");
         let resolver = TokioAsyncResolver::tokio_from_system_conf()
@@ -100,7 +121,6 @@ impl Worker {
             .wrap_err("creating dns resolver")?;
         let pool = PoolManager::new(config.pool_size, config.outbound_local);
 
-        // Create DKIM signer if dkim is enabled.
         let dkim_signer = match dkim {
             None => None,
             Some(dkim) => {
@@ -125,6 +145,7 @@ impl Worker {
             max_delay: Duration::from_secs(60 * 60 * 24),
             dkim_signer,
             rate_limiter: RateLimiter::new(config.rate_limit_config),
+            plugin_manager,
         })
     }
 
@@ -230,10 +251,12 @@ impl Worker {
                     to_email = email.to.join(","),
                     "Successfully sent email"
                 );
+
+                self.call_plugin_hook(Hook::AfterSend, &email).await;
+
                 self.storage.delete(&job.job_id, Status::Queued).await?;
                 metrics::queue_depth_dec();
                 metrics::email_sent();
-                // Delete any meta file in deferred.
                 self.storage
                     .delete_meta(&job.job_id)
                     .await
@@ -264,8 +287,9 @@ impl Worker {
                             to_email = email.to.join(","),
                             ?e, "Non-retryable error, bouncing email"
                         );
-                        // Bounce the email.
-                        println!("Error sending email: {:?}", e);
+
+                        self.call_plugin_hook(Hook::OnBounce, &email).await;
+
                         self.storage
                             .mv(&job.job_id, &job.job_id, Status::Queued, Status::Bounced)
                             .await

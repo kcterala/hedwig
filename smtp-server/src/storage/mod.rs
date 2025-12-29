@@ -3,6 +3,7 @@ use camino::Utf8PathBuf;
 use futures::Stream;
 use miette::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::{pin::Pin, time::Duration};
 
 use crate::worker::EmailMetadata;
@@ -15,6 +16,8 @@ pub struct StoredEmail {
     pub from: String,
     pub to: Vec<String>,
     pub body: String,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
 }
 
 pub enum Status {

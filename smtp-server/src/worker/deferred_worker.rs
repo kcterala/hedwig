@@ -144,6 +144,7 @@ mod tests {
             from: "test@example.com".to_string(),
             to: vec!["recipient@example.com".to_string()],
             body: "Test email".to_string(),
+            metadata: std::collections::HashMap::new(),
         };
         worker.storage.put(email, Status::Deferred).await.unwrap();
 
@@ -175,6 +176,7 @@ mod tests {
             from: "test@example.com".to_string(),
             to: vec!["recipient@example.com".to_string()],
             body: "Test email".to_string(),
+            metadata: std::collections::HashMap::new(),
         };
         worker.storage.put(email, Status::Deferred).await.unwrap();
 
@@ -208,6 +210,7 @@ mod tests {
             from: "test@example.com".to_string(),
             to: vec!["recipient@example.com".to_string()],
             body: "Test email".to_string(),
+            metadata: std::collections::HashMap::new(),
         };
         worker.storage.put(email, Status::Deferred).await.unwrap();
 
@@ -232,6 +235,7 @@ mod tests {
             from: "test@example.com".to_string(),
             to: vec!["recipient@example.com".to_string()],
             body: "Test email".to_string(),
+            metadata: std::collections::HashMap::new(),
         };
         worker.storage.put(email, Status::Deferred).await.unwrap();
 

@@ -399,6 +399,7 @@ mod tests {
             from: "sender@example.com".to_string(),
             to: vec!["recipient@example.com".to_string()],
             body: "Test email body".to_string(),
+            metadata: std::collections::HashMap::new(),
         }
     }
 
