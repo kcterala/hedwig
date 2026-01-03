@@ -8,3 +8,7 @@ certs/
 .aider*
 *.key
 dist/
+.direnv/
+*.wasm
+
+*.pem

@@ -1,27 +1,106 @@
 # Repository Guidelines
 
-## Repository Structure
-- `Cargo.toml` – Rust workspace root referencing the `smtp-server` binary crate and the reusable `smtp` library crate.
-- `smtp-server/` – main application (`src/main.rs`, `config.rs`, `callbacks.rs`, `storage/`, `worker/`).
-- `smtp/` – protocol library with parsers and shared types (`src/lib.rs`, `src/parser.rs`).
-- `dev/` – Docker and Mailpit sandbox (`docker-compose.yml`, TLS fixtures under `certs/`).
-- `docs/` – configuration and architecture guides.
-- `dist/` – published binaries and checksums; `tmp/`, `target/` should remain untracked in commits.
+## 1. Build, Test & Lint Commands
 
-## Project Structure & Module Organization
-Keep module-level documentation near the code: crate-specific guides belong in the respective `src/` tree, and tests sit next to the logic they cover (`smtp/src`, `smtp-server/src/**`). Configuration templates (`config.example.toml`) should mirror real deployments while keeping secrets out of the repo.
+### Common Commands
+- **Run Dev Server**: `just run` (wraps `cargo run`)
+- **Run Release**: `just run-release`
+- **Build Release**: `just build` (wraps `cargo build`)
+- **Test All**: `just test` (wraps `cargo test`)
+- **Lint**: `cargo clippy --workspace --all-targets`
+- **Format**: `cargo fmt`
 
-## Build, Test, and Development Commands
-Use `just run` or `cargo run` for debug execution, and `just build` or `cargo build --release` for optimized binaries. `just test` wraps `cargo test` across the workspace; `just build-linux` and `just build-macos` produce portable targets. Start the Docker sandbox with `just dev`, and finish every change with `cargo fmt` plus `cargo clippy --workspace --all-targets`.
+### Advanced Testing (Crucial for Agents)
+- **Run Single Test**:
+  ```bash
+  cargo test test_name_here
+  ```
+- **Run Single Test in Specific Crate**:
+  ```bash
+  cargo test -p smtp-server -- test_name_here
+  ```
+- **Run with Output**:
+  ```bash
+  cargo test test_name_here -- --nocapture
+  ```
+- **Run Integration Tests Only**:
+  ```bash
+  cargo test --test integration_test_name
+  ```
 
-## Coding Style & Naming Conventions
-Follow idiomatic Rust with four-space indentation, `snake_case` for modules and functions, `UpperCamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants. Let `rustfmt` handle layout, keep worker logic scoped under `smtp-server/src/worker`, and return `miette::Result<T>` so diagnostics remain uniform.
+## 2. Repository Structure
 
-## Testing Guidelines
-Embed `#[cfg(test)] mod tests` in the same file as the code, mirroring `smtp/src/parser.rs` and `smtp-server/src/worker/*.rs`. Cover success and error paths, reuse existing fixtures, and run `cargo test` (via `just test`) before opening a pull request; when adding async flows, drive the Tokio runtime explicitly.
+- **Workspace Root**: `Cargo.toml` defines workspace members.
+- **`smtp/` (Library)**:
+  - Protocol parsers (`src/parser.rs`)
+  - Shared types (`src/lib.rs`)
+  - Pure Rust, minimal dependencies.
+  - Uses `thiserror` for library errors.
+- **`smtp-server/` (Application)**:
+  - Main binary entry (`src/main.rs`)
+  - Configuration (`src/config.rs`)
+  - SMTP Logic (`src/callbacks.rs`)
+  - Storage backends (`src/storage/`)
+  - Worker queues (`src/worker/`)
+  - Uses `miette` for application errors.
+  - Uses `tokio` for async runtime.
 
-## Commit & Pull Request Guidelines
-Use the conventional commit prefixes present in history (`feat:`, `fix:`, `docs:`, `test:`) and keep messages imperative and focused. Pull requests should state motivation, summarize the approach, reference linked issues, list configuration or migration steps, and note the commands used for verification (e.g. `cargo test`, `just dev`), attaching evidence when behaviour changes.
+## 3. Code Style & Conventions
 
-## Configuration & Security Tips
-Keep environment-specific settings in untracked copies of `config.toml`; rely on `config.example.toml` and `dev/certs/` for local scaffolding. Never commit real keys or credentials—generate DKIM or TLS material locally and store it according to `docs/CONFIGURATION.md`.
+### Formatting & Imports
+- **Standard Rust**: 4-space indentation.
+- **Import Order**:
+  1. `std` / `core`
+  2. External crates (`tokio`, `tracing`, `miette`)
+  3. Internal modules (`crate::config`, `super::*`)
+- **Grouping**: Group imports from the same crate (e.g., `use tokio::net::{TcpListener, TcpStream};`).
+
+### Naming
+- **Functions/Variables**: `snake_case`
+- **Types/Traits**: `UpperCamelCase`
+- **Constants**: `SCREAMING_SNAKE_CASE`
+- **Files**: `snake_case.rs` matches module name.
+
+### Error Handling
+- **Application (`smtp-server`)**:
+  - Return `miette::Result<T>`.
+  - Use `IntoDiagnostic` and `WrapErr` (or `Context`) for context.
+  - Example: `.into_diagnostic().wrap_err("failed to bind port")?`
+- **Library (`smtp`)**:
+  - Define custom enums with `thiserror`.
+  - Do NOT use `miette` or `anyhow` in the library public API.
+
+### Async & Concurrency
+- Use `tokio` for all async operations.
+- Use `#[async_trait]` for traits requiring async methods (e.g., `SmtpCallbacks`, `Storage`).
+- Spawning: Use `tokio::spawn` for background tasks. Track handles if graceful shutdown is needed.
+- Channels: Use `async_channel` for worker queues.
+
+### Logging
+- Use `tracing` crate (`info!`, `warn!`, `error!`, `debug!`).
+- Do NOT use `println!` or `eprintln!` in production code (except early startup/CLI).
+- Structured logging is preferred: `info!(user = %username, "login successful");`
+
+## 4. Testing Guidelines
+
+- **Location**: Co-locate tests with code in `#[cfg(test)] mod tests { ... }` blocks at the bottom of the file.
+- **Async Tests**: Use `#[tokio::test]`.
+- **Mocking**: Use struct-based mocks (like `MockStorage` in `callbacks.rs`) rather than heavy mocking frameworks if simple traits suffice.
+- **Fixtures**: Keep test logic self-contained or use helper functions within the `tests` module.
+
+## 5. Development Workflow
+
+1. **Analysis**: Before implementing, understand the module role (`smtp` vs `smtp-server`).
+2. **Implementation**:
+   - Follow existing patterns.
+   - If adding a new feature, update `config.rs` and `config.example.toml` if needed.
+3. **Verification**:
+   - Run related tests: `cargo test -p <crate> -- <module_name>`
+   - Check linting: `cargo clippy`
+   - Ensure clean build: `cargo build`
+4. **Docs**: Update module-level docs if architectural changes are made.
+
+## 6. Critical constraints
+- **Never** commit secrets or keys.
+- **Never** suppress types with `unsafe` unless absolutely necessary and documented.
+- **Never** leave `todo!()` macros in production paths.

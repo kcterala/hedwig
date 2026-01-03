@@ -1,0 +1,211 @@
+# Domain Filter Plugin Configuration Examples for Hedwig
+# 
+# This file shows example configurations for the domain-filter plugin.
+# Copy the relevant section to your Hedwig config.toml file and adjust paths
+# as needed.
+
+# =============================================================================
+# Example 1: Blocklist Mode (Default)
+# =============================================================================
+# Rejects emails from or to domains listed in blocked_domains.
+# All other domains are allowed.
+
+[[plugins]]
+name = "domain-filter"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+# Mode: "blocklist" or "allowlist"
+mode = "blocklist"
+
+# List of domains to block (case-insensitive)
+blocked_domains = [
+    "spam-source.com",
+    "phishing-site.net",
+    "malicious-domain.org",
+    "suspicious-email.xyz",
+    "known-spammer.info"
+]
+
+# Note: allowed_domains is ignored in blocklist mode
+allowed_domains = []
+
+
+# =============================================================================
+# Example 2: Allowlist Mode
+# =============================================================================
+# Only accepts emails from or to domains listed in allowed_domains.
+# All other domains are rejected.
+
+[[plugins]]
+name = "domain-filter"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+# Mode: "blocklist" or "allowlist"
+mode = "allowlist"
+
+# List of domains to allow (case-insensitive)
+allowed_domains = [
+    "trusted-company.com",
+    "partner-organization.org",
+    "internal-network.net",
+    "verified-sender.io"
+]
+
+# Note: blocked_domains is ignored in allowlist mode
+blocked_domains = []
+
+
+# =============================================================================
+# Example 3: Strict Allowlist for Internal Mail Only
+# =============================================================================
+# Only accepts emails from and to internal domains.
+# Useful for securing internal communication servers.
+
+[[plugins]]
+name = "domain-filter-internal"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+mode = "allowlist"
+allowed_domains = [
+    "mycompany.com",
+    "corp.mycompany.com",
+    "internal.mycompany.com"
+]
+blocked_domains = []
+
+
+# =============================================================================
+# Example 4: Block Known Spam Domains
+# =============================================================================
+# Blocks emails from known spam sources while allowing all other domains.
+
+[[plugins]]
+name = "domain-filter-spam"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+mode = "blocklist"
+blocked_domains = [
+    "spam-domain-1.com",
+    "spam-domain-2.net",
+    "spam-domain-3.org",
+    "bulk-mailer.info",
+    "marketing-spam.xyz"
+]
+allowed_domains = []
+
+
+# =============================================================================
+# Example 5: Combined Filtering with Multiple Plugins
+# =============================================================================
+# Use multiple instances of the plugin for complex filtering scenarios.
+# This example blocks spam domains AND only allows specific recipient domains.
+
+# First, block known spam domains (checks sender)
+[[plugins]]
+name = "domain-filter-blocklist"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from"]
+
+[plugins.config]
+mode = "blocklist"
+blocked_domains = [
+    "spam.com",
+    "malicious.org",
+    "phishing.net"
+]
+allowed_domains = []
+
+# Then, only allow specific recipient domains (checks recipients)
+[[plugins]]
+name = "domain-filter-allowlist"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_rcpt_to"]
+
+[plugins.config]
+mode = "allowlist"
+allowed_domains = [
+    "trusted-recipient.com",
+    "internal.company.com"
+]
+blocked_domains = []
+
+
+# =============================================================================
+# Example 6: Minimal Configuration (Blocklist Mode)
+# =============================================================================
+# Simple configuration with just one blocked domain.
+
+[[plugins]]
+name = "domain-filter"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+mode = "blocklist"
+blocked_domains = ["unwanted-domain.com"]
+allowed_domains = []
+
+
+# =============================================================================
+# Example 7: Minimal Configuration (Allowlist Mode)
+# =============================================================================
+# Simple configuration with just one allowed domain.
+
+[[plugins]]
+name = "domain-filter"
+path = "/path/to/domain_filter.wasm"
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+mode = "allowlist"
+allowed_domains = ["trusted-domain.com"]
+blocked_domains = []
+
+
+# =============================================================================
+# Configuration Notes
+# =============================================================================
+#
+# 1. Path Configuration:
+#    - Update the `path` field to point to your built WASM file
+#    - Use absolute paths for reliability: `/full/path/to/domain_filter.wasm`
+#    - Or relative paths from Hedwig's working directory: `./plugins/domain_filter.wasm`
+#
+# 2. Hooks:
+#    - `on_mail_from`: Validates the sender's email domain
+#    - `on_rcpt_to`: Validates all recipient email domains
+#    - Use both hooks for comprehensive filtering
+#    - Use only one hook if you want to filter only senders or only recipients
+#
+# 3. Mode Selection:
+#    - `blocklist`: Rejects specific domains (default, more permissive)
+#    - `allowlist`: Allows only specific domains (more restrictive)
+#
+# 4. Domain Matching:
+#    - Domain matching is case-insensitive
+#    - Subdomains are NOT automatically matched (e.g., "example.com" does not match "mail.example.com")
+#    - List each domain explicitly that you want to block or allow
+#
+# 5. Empty Lists:
+#    - Empty `blocked_domains` in blocklist mode: No domains are blocked (allow all)
+#    - Empty `allowed_domains` in allowlist mode: No domains are allowed (block all)
+#
+# 6. Plugin Behavior:
+#    - On configuration errors, the plugin defaults to allowing emails (fail-open)
+#    - All filter decisions are logged for audit purposes
+#    - Returns metadata with domain check results for monitoring
+#
+# 7. Performance:
+#    - Domain checking is fast (O(n) complexity per check)
+#    - Use TinyGo-compiled WASM for best performance
+#    - Plugin runs early in SMTP transaction for efficient rejection
+#
+# =============================================================================

@@ -5,6 +5,7 @@ Hedwig supports WASM plugins via [Extism](https://extism.org/) for extending ema
 ## Overview
 
 Plugins are WebAssembly modules that:
+
 - Subscribe to specific hooks in the email lifecycle
 - Receive JSON input with email context
 - Return JSON output with an action and optional metadata
@@ -68,15 +69,15 @@ struct HookOutput {
 #[plugin_fn]
 pub fn on_data(input: String) -> FnResult<String> {
     let input: HookInput = serde_json::from_str(&input)?;
-    
+
     // Your logic here
-    
+
     let output = HookOutput {
         action: "continue".to_string(),
         message: None,
         metadata: HashMap::new(),
     };
-    
+
     Ok(serde_json::to_string(&output)?)
 }
 ```
@@ -124,11 +125,13 @@ Client connects
 Called when the MAIL FROM command is received.
 
 **Use cases:**
+
 - Sender validation
 - Reputation checking
 - Early rejection of known bad senders
 
 **Available fields:**
+
 - `message_id` - Unique message identifier
 - `from` - Sender email address
 - `plugin_config` - Your plugin's configuration
@@ -139,11 +142,13 @@ Called when the MAIL FROM command is received.
 Called for each RCPT TO command.
 
 **Use cases:**
+
 - Recipient validation
 - Routing decisions
 - Per-recipient filtering
 
 **Available fields:**
+
 - All `on_mail_from` fields
 - `to` - Array of recipient addresses (current recipient)
 
@@ -152,12 +157,14 @@ Called for each RCPT TO command.
 Called after the email body is received.
 
 **Use cases:**
+
 - Spam filtering
 - Content inspection
 - Header analysis
 - Virus scanning (via external API)
 
 **Available fields:**
+
 - All previous fields
 - `subject` - Email subject
 - `headers` - All email headers
@@ -169,12 +176,14 @@ Called after the email body is received.
 Called after successful email delivery.
 
 **Use cases:**
+
 - Audit logging
 - Analytics
 - Webhooks to external services
 - Success notifications
 
 **Available fields:**
+
 - All `on_data` fields
 - Delivery metadata from the send operation
 
@@ -183,12 +192,14 @@ Called after successful email delivery.
 Called when an email permanently fails delivery.
 
 **Use cases:**
+
 - Suppression list management
 - Alerting
 - Bounce analytics
 - Notifying original sender
 
 **Available fields:**
+
 - All `on_data` fields
 - Bounce reason in metadata
 
@@ -239,23 +250,25 @@ Response format from plugins:
 
 ### Actions
 
-| Action | Effect |
-|--------|--------|
-| `continue` | Proceed to next plugin or step |
-| `reject` | Permanently reject the email |
-| `defer` | Temporarily reject (client should retry) |
+| Action     | Effect                                   |
+| ---------- | ---------------------------------------- |
+| `continue` | Proceed to next plugin or step           |
+| `reject`   | Permanently reject the email             |
+| `defer`    | Temporarily reject (client should retry) |
 
 ### Examples
 
 **Continue processing:**
+
 ```json
 {
   "action": "continue",
-  "metadata": {"spam_score": 2.5}
+  "metadata": { "spam_score": 2.5 }
 }
 ```
 
 **Reject spam:**
+
 ```json
 {
   "action": "reject",
@@ -264,6 +277,7 @@ Response format from plugins:
 ```
 
 **Temporary failure:**
+
 ```json
 {
   "action": "defer",
@@ -287,6 +301,7 @@ extern "ExtismHost" {
 ```
 
 Usage:
+
 ```rust
 unsafe {
     log_info("Processing email")?;
@@ -296,6 +311,7 @@ unsafe {
 ```
 
 Logs appear in Hedwig's output with your plugin name:
+
 ```
 INFO hedwig: [my-plugin] Processing email
 WARN hedwig: [my-plugin] Suspicious content detected
@@ -322,15 +338,15 @@ custom_list = ["item1", "item2"]
 
 ### Configuration Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `name` | string | required | Unique plugin identifier |
-| `path` | string | required | Path to .wasm file |
-| `enabled` | bool | `true` | Enable/disable plugin |
-| `on_error` | string | `"continue"` | Error handling mode |
-| `priority` | int | `50` | Execution order |
-| `hooks` | array | required | Subscribed hooks |
-| `config` | table | `{}` | Plugin-specific config |
+| Option     | Type   | Default      | Description              |
+| ---------- | ------ | ------------ | ------------------------ |
+| `name`     | string | required     | Unique plugin identifier |
+| `path`     | string | required     | Path to .wasm file       |
+| `enabled`  | bool   | `true`       | Enable/disable plugin    |
+| `on_error` | string | `"continue"` | Error handling mode      |
+| `priority` | int    | `50`         | Execution order          |
+| `hooks`    | array  | required     | Subscribed hooks         |
+| `config`   | table  | `{}`         | Plugin-specific config   |
 
 ### Priority
 
@@ -358,6 +374,7 @@ The `on_error` setting controls behavior when a plugin fails:
 Plugins can pass data to subsequent plugins via metadata:
 
 **Plugin A (priority 10):**
+
 ```rust
 let mut metadata = HashMap::new();
 metadata.insert("spam_score".to_string(), json!(2.5));
@@ -371,6 +388,7 @@ HookOutput {
 ```
 
 **Plugin B (priority 20):**
+
 ```rust
 // Access metadata from Plugin A
 if let Some(score) = input.metadata.get("spam_score") {
@@ -427,7 +445,7 @@ struct HookOutput {
 pub fn on_data(input: String) -> FnResult<String> {
     let input: HookInput = serde_json::from_str(&input)?;
     let mut score = 0.0;
-    
+
     // Check blocked domains
     let from_domain = input.from.split('@').last().unwrap_or("");
     if input.plugin_config.blocked_domains.contains(&from_domain.to_string()) {
@@ -437,7 +455,7 @@ pub fn on_data(input: String) -> FnResult<String> {
             metadata: HashMap::new(),
         })?);
     }
-    
+
     // Simple spam heuristics
     if let Some(subject) = &input.subject {
         let subject_lower = subject.to_lowercase();
@@ -448,11 +466,11 @@ pub fn on_data(input: String) -> FnResult<String> {
             score += 1.0;
         }
     }
-    
+
     // Add score to metadata for other plugins
     let mut metadata = HashMap::new();
     metadata.insert("spam_score".to_string(), serde_json::json!(score));
-    
+
     if score >= input.plugin_config.threshold {
         Ok(serde_json::to_string(&HookOutput {
             action: "reject".to_string(),
@@ -470,6 +488,7 @@ pub fn on_data(input: String) -> FnResult<String> {
 ```
 
 Configuration:
+
 ```toml
 [[plugins]]
 name = "spam-filter"
@@ -526,7 +545,7 @@ extern "ExtismHost" {
 #[plugin_fn]
 pub fn after_send(input: String) -> FnResult<String> {
     let input: HookInput = serde_json::from_str(&input)?;
-    
+
     // Note: WASM can't make HTTP calls directly
     // Log the intent - in production you'd use a host function
     unsafe {
@@ -538,7 +557,7 @@ pub fn after_send(input: String) -> FnResult<String> {
             input.to
         ))?;
     }
-    
+
     Ok(serde_json::to_string(&HookOutput {
         action: "continue".to_string(),
         message: None,
@@ -546,6 +565,63 @@ pub fn after_send(input: String) -> FnResult<String> {
     })?)
 }
 ```
+
+### Go Plugin Example: Domain Filter
+
+This example demonstrates Go WASM plugin development with Extism, implementing domain-based email filtering with support for blocklist and allowlist modes.
+
+#### Features
+
+- Supports blocklist and allowlist filtering modes
+- Filters based on sender (on_mail_from) and recipient (on_rcpt_to) domains
+- Uses Extism Go PDK for WASM execution
+- Calls host functions for logging
+- Returns metadata for monitoring
+
+#### Location
+
+- Path: `examples/plugins/domain-filter/`
+- Files: `main.go`, `go.mod`, `README.md`, `config.example.toml`
+
+#### Building the Plugin
+
+```bash
+cd examples/plugins/domain-filter
+go mod tidy
+
+# Using TinyGo (recommended for smaller size):
+tinygo build -o domain_filter.wasm -target wasm main.go
+
+# Using standard Go:
+GOOS=js GOARCH=wasm go build -o domain_filter.wasm main.go
+```
+
+#### Configuration Example
+
+```toml
+[[plugins]]
+name = "domain-filter"
+path = "examples/plugins/domain-filter/domain_filter.wasm"
+priority = 10
+hooks = ["on_mail_from", "on_rcpt_to"]
+
+[plugins.config]
+blocked_domains = ["spam.com", "malware.net"]
+mode = "blocklist"
+```
+
+#### Key Implementation Details
+
+- Uses Extism Go PDK (github.com/extism/go-pdk)
+- Exports `on_mail_from` and `on_rcpt_to` functions
+- Parses JSON input and returns JSON output
+- Implements domain extraction and matching logic
+- Handles errors with fail-open default behavior
+
+#### For More Information
+
+- See [`examples/plugins/domain-filter/README.md`](../examples/plugins/domain-filter/README.md) for detailed documentation
+- Extism Go PDK documentation: https://pkg.go.dev/github.com/extism/go-pdk
 
 ## Testing Plugins
 
@@ -570,7 +646,7 @@ mod tests {
             },
             "metadata": {}
         }"#;
-        
+
         // Test your logic
         let input: HookInput = serde_json::from_str(input).unwrap();
         assert!(input.plugin_config.blocked_domains.contains(&"spam.com".to_string()));
@@ -607,11 +683,13 @@ mod tests {
 ### Plugin not loading
 
 Check the logs:
+
 ```bash
 HEDWIG_LOG_LEVEL=debug ./hedwig
 ```
 
 Common issues:
+
 - Wrong path in config
 - Missing WASM file
 - Invalid WASM binary (compile with `--target wasm32-unknown-unknown`)
@@ -619,6 +697,7 @@ Common issues:
 ### Hook not being called
 
 Verify:
+
 - Hook name in config matches function name exactly
 - Plugin is `enabled = true`
 - Hook is in the `hooks` array
@@ -626,6 +705,7 @@ Verify:
 ### Plugin errors
 
 With `on_error = "continue"`, errors are logged but don't stop processing:
+
 ```
 ERROR hedwig: [my-plugin] Plugin execution failed: ...
 ```
