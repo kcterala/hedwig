@@ -111,7 +111,6 @@ For detailed technical information about the server's architecture and design, s
 
 For detailed configuration information, see:
 - [Configuration Guide](docs/CONFIGURATION.md) - Complete configuration reference
-- [Example Configurations](examples/) - Ready-to-use configuration examples
 
 ### Server Configuration
 
