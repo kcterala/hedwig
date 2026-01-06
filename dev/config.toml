@@ -1,0 +1,38 @@
+# Development configuration for Hedwig SMTP Server
+# Used by `just dev` - runs inside Docker container
+
+[server]
+workers = 4
+disable_outbound = false
+outbound_local = true
+
+# TLS listener on port 2525
+[[server.listeners]]
+addr = "0.0.0.0:2525"
+[server.listeners.tls]
+cert_path = "/app/dev/certs/server.pem"
+key_path = "/app/dev/certs/server-key.pem"
+
+# Plaintext listener on port 2526
+[[server.listeners]]
+addr = "0.0.0.0:2526"
+
+[log]
+level = "debug"
+format = "json"
+
+# DKIM configuration (for testing)
+[server.dkim]
+domain = "example.com"
+selector = "default"
+private_key = "/app/dev/certs/dkim-private.pem"
+key_type = "rsa"
+
+# Test credentials
+[[server.auth]]
+username = "test"
+password = "test"
+
+[storage]
+storage_type = "fs"
+base_path = "/tmp/hedwig-dev/"

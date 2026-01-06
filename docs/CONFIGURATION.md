@@ -84,7 +84,7 @@ hedwig dkim-generate
 
 #### Rate Limiting (`[server.rate_limits]`)
 
-**NEW FEATURE**: Configure per-domain rate limiting to control email sending rates.
+Configure per-domain rate limiting to control email sending rates.
 
 ```toml
 [server.rate_limits]
@@ -246,18 +246,3 @@ action = "deny"
 You can also control logging via environment variables:
 
 - `HEDWIG_LOG_LEVEL`: Override log level (e.g., `HEDWIG_LOG_LEVEL=debug`)
-
-## Security Considerations
-
-1. **File Permissions**: Ensure DKIM private keys have restricted permissions (600)
-2. **TLS Certificates**: Use valid TLS certificates for production
-3. **Authentication**: Use strong passwords for SMTP authentication
-4. **Network**: Bind to localhost for development, specific interfaces for production
-5. **Rate Limiting**: Configure appropriate rate limits to avoid being blocked by destination servers
-
-## Monitoring and Troubleshooting
-
-- Use `info` level logging for production monitoring
-- Use `debug` level for troubleshooting email delivery issues
-- Monitor rate limiting logs to adjust limits as needed
-- Check DKIM signature validation with online tools

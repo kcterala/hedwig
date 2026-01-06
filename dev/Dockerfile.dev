@@ -1,19 +1,15 @@
-FROM rust:1.84-slim-bookworm
+FROM rust:1.92-slim-bookworm
 
 WORKDIR /app
 
-# Install build dependencies and ca-certificates
 RUN apt-get update && \
     apt-get install -y pkg-config libssl-dev ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Install cargo-watch for development
 RUN cargo install cargo-watch
 
-# Copy root CA from host
 COPY certs/rootCA.pem /usr/local/share/ca-certificates/rootCA.crt
 
-# Update CA certificates
 RUN update-ca-certificates
 
-CMD ["cargo", "watch", "-x", "run"]
+CMD ["cargo", "watch", "-x", "run -- --config /app/dev/config.toml"]

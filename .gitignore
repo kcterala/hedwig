@@ -1,10 +1,9 @@
 /target
 /tmp
-config.toml
+/config.toml
 config.huml
-certs/
 .envrc
 .aider*
 *.key
 dist/
-*.pem
+/*.pem

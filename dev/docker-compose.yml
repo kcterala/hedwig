@@ -6,7 +6,7 @@ services:
       - ./Corefile:/etc/coredns/Corefile
     networks:
       smtp_test:
-        ipv4_address: 172.20.0.2
+        ipv4_address: 172.30.0.2
 
   mailpit:
     image: axllent/mailpit:latest
@@ -23,7 +23,7 @@ services:
       - MP_MAX_MESSAGES=20
     networks:
       smtp_test:
-        ipv4_address: 172.20.0.3
+        ipv4_address: 172.30.0.3
         aliases:
           - mailpit
 
@@ -36,15 +36,16 @@ services:
       - ../target:/app/target
     environment:
       - RUST_LOG=debug
-      - DNS_SERVER=172.20.0.2
+      - DNS_SERVER=172.30.0.2
     dns:
-      - 172.20.0.2
+      - 172.30.0.2
     networks:
       smtp_test:
         aliases:
           - smtp
     ports:
       - "2525:2525"
+      - "2526:2526"
     depends_on:
       - dns
       - mailpit
@@ -57,4 +58,4 @@ networks:
     name: smtp_test
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.30.0.0/16
