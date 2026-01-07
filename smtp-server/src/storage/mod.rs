@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use camino::Utf8PathBuf;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use miette::Result;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,10 @@ pub struct StoredEmail {
     pub from: String,
     pub to: Vec<String>,
     pub body: String,
+    /// Timestamp when the email was queued for delivery.
+    /// Uses Option for backward compatibility with existing stored emails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<DateTime<Utc>>,
 }
 
 pub enum Status {
