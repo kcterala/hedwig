@@ -1,5 +1,6 @@
 use crate::config::DkimKeyType;
 use async_channel::Receiver;
+use chrono::Utc;
 use email_address_parser::EmailAddress;
 use hickory_resolver::{
     lookup::MxLookup,
@@ -29,7 +30,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::CfgDKIM,
     metrics,
-    storage::{Status, Storage},
+    storage::{Status, Storage, StoredEmail},
 };
 
 pub mod deferred_worker;
@@ -41,6 +42,24 @@ use rate_limiter::{RateLimitConfig, RateLimitResult, RateLimiter};
 const HEADER_BODY_SEPARATOR: &[u8] = b"\r\n\r\n";
 const BCC_HEADER_PREFIX: &[u8] = b"Bcc:";
 const DKIM_HEADERS: [&str; 5] = ["From", "To", "Subject", "Date", "Message-ID"];
+
+struct DeliveryContext<'a> {
+    job_id: &'a str,
+    stored_email: &'a StoredEmail,
+    subject: Option<&'a str>,
+    attempt: u32,
+}
+
+fn strip_brackets(s: &str) -> &str {
+    s.trim_matches(|c| c == '<' || c == '>')
+}
+
+fn fmt_option<T: std::fmt::Display>(opt: Option<T>) -> String {
+    match opt {
+        Some(v) => v.to_string(),
+        None => String::new(),
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct EmailMetadata {
@@ -209,12 +228,20 @@ impl Worker {
             }
         };
 
+        let subject = msg.subject().map(|s| s.to_string());
+
         if self.disable_outbound {
             info!(
-                msg_id = job.job_id,
-                from_email = email.from,
-                to_email = email.to.join(","),
-                "Outbound mail disabled, dropping message"
+                job_id = %job.job_id,
+                from_email = %strip_brackets(&email.from),
+                recipient = %email.to.iter().map(|s| strip_brackets(s)).collect::<Vec<_>>().join(","),
+                subject = %fmt_option(subject.as_deref()),
+                status = "dropped",
+                smtp_response = "outbound disabled",
+                queued_at = %fmt_option(email.queued_at),
+                logged_at = %Utc::now(),
+                attempt = %job.attempts,
+                "email delivery"
             );
             self.storage.delete(&job.job_id, Status::Queued).await?;
             metrics::queue_depth_dec();
@@ -222,60 +249,66 @@ impl Worker {
             return Ok(());
         }
 
-        match self.send_email(&email.to, &msg, &email.body).await {
+        let ctx = DeliveryContext {
+            job_id: &job.job_id,
+            stored_email: &email,
+            subject: subject.as_deref(),
+            attempt: job.attempts,
+        };
+
+        match self.send_email(&email.to, &msg, &email.body, &ctx).await {
             Ok(_) => {
-                info!(
-                    msg_id = job.job_id,
-                    from_email = email.from,
-                    to_email = email.to.join(","),
-                    "Successfully sent email"
-                );
                 self.storage.delete(&job.job_id, Status::Queued).await?;
                 metrics::queue_depth_dec();
                 metrics::email_sent();
-                // Delete any meta file in deferred.
                 self.storage
                     .delete_meta(&job.job_id)
                     .await
                     .wrap_err("deleting meta file")?;
                 Ok(())
             }
-            Err(e) => {
-                match e.downcast_ref::<Error>() {
-                    Some(Error::UnexpectedReply(resp)) => {
-                        if Self::is_retryable(resp.code()) {
-                            warn!(
-                                msg_id = ?job.job_id,
-                                code = resp.code(),
-                                from_email = email.from,
-                                to_email = email.to.join(","),
-                                "Retryable error encountered, deferring email"
-                            );
-                            // Defer the email.
-                            println!("Error sending email: {:?}", e);
-                            self.defer_email(job).await?;
-                        }
-                        Ok(())
-                    }
-                    _ => {
-                        error!(
-                            msg_id = ?job.job_id,
-                            from_email = email.from,
-                            to_email = email.to.join(","),
-                            ?e, "Non-retryable error, bouncing email"
+            Err(e) => match e.downcast_ref::<Error>() {
+                Some(Error::UnexpectedReply(resp)) => {
+                    if Self::is_retryable(resp.code()) {
+                        let smtp_response = format!("{} {}", resp.code(), resp.message());
+                        info!(
+                            job_id = %job.job_id,
+                            from_email = %strip_brackets(&email.from),
+                            recipient = %email.to.iter().map(|s| strip_brackets(s)).collect::<Vec<_>>().join(","),
+                            subject = %fmt_option(subject.as_deref()),
+                            status = "deferred",
+                            smtp_response = %smtp_response,
+                            queued_at = %fmt_option(email.queued_at),
+                            logged_at = %Utc::now(),
+                            attempt = %(job.attempts + 1),
+                            "email delivery"
                         );
-                        // Bounce the email.
-                        println!("Error sending email: {:?}", e);
-                        self.storage
-                            .mv(&job.job_id, &job.job_id, Status::Queued, Status::Bounced)
-                            .await
-                            .wrap_err("moving from queued to bounced")?;
-                        metrics::queue_depth_dec();
-                        metrics::email_bounced();
-                        Ok(())
+                        self.defer_email(job).await?;
                     }
+                    Ok(())
                 }
-            }
+                _ => {
+                    info!(
+                        job_id = %job.job_id,
+                        from_email = %strip_brackets(&email.from),
+                        recipient = %email.to.iter().map(|s| strip_brackets(s)).collect::<Vec<_>>().join(","),
+                        subject = %fmt_option(subject.as_deref()),
+                        status = "bounced",
+                        smtp_response = %format!("{:#}", e),
+                        queued_at = %fmt_option(email.queued_at),
+                        logged_at = %Utc::now(),
+                        attempt = %job.attempts,
+                        "email delivery"
+                    );
+                    self.storage
+                        .mv(&job.job_id, &job.job_id, Status::Queued, Status::Bounced)
+                        .await
+                        .wrap_err("moving from queued to bounced")?;
+                    metrics::queue_depth_dec();
+                    metrics::email_bounced();
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -361,6 +394,7 @@ impl Worker {
         to: &[String],
         email: &'b Message<'b>,
         body: &str,
+        ctx: &DeliveryContext<'b>,
     ) -> Result<()> {
         let email_bytes_no_bcc =
             Self::remove_bcc_header(body.as_bytes()).wrap_err("Failed to remove Bcc header")?;
@@ -503,10 +537,24 @@ impl Worker {
 
                 let send_start = Instant::now();
                 match transport.send_raw(&envelope, raw_email).await {
-                    Ok(_) => {
+                    Ok(response) => {
                         metrics::record_send_success(
                             parsed_email_id.get_domain(),
                             send_start.elapsed(),
+                        );
+                        let smtp_response = response.message().collect::<Vec<_>>().join(" ");
+                        info!(
+                            job_id = %ctx.job_id,
+                            from_email = %strip_brackets(&ctx.stored_email.from),
+                            recipient = %strip_brackets(to),
+                            subject = %fmt_option(ctx.subject),
+                            status = "delivered",
+                            smtp_response = %format!("{} {}", response.code(), smtp_response),
+                            dest_ip = %exchange,
+                            queued_at = %fmt_option(ctx.stored_email.queued_at),
+                            logged_at = %Utc::now(),
+                            attempt = %ctx.attempt,
+                            "email delivery"
                         );
                         success = true;
                         break;

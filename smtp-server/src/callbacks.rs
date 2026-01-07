@@ -1,3 +1,4 @@
+use chrono::Utc;
 use email_address_parser::EmailAddress;
 use mailparse::MailAddr;
 /// This file defines the callbacks for the SMTP server.
@@ -150,6 +151,7 @@ impl Callbacks {
             from: email.from.clone(),
             to: email.to.clone(),
             body: email.body.clone(),
+            queued_at: Some(Utc::now()),
         };
         // Map any error into a SmtpError.
         self.storage
