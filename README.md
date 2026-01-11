@@ -19,7 +19,7 @@
 
 This SMTP server is designed with a focus on speed and simplicity. It provides a streamlined solution for receiving, queuing, and forwarding emails to destination SMTP servers.
 
-For detailed technical information about the server's architecture and design, see the [Architecture Documentation](smtp-server/ARCHITECTURE.md).
+For detailed technical information about the server's architecture and design, see the [Architecture Documentation](docs/ARCHITECTURE.md).
 
 ## Key Features
 
